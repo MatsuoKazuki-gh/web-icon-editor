@@ -1,7 +1,7 @@
 const PRESETS = {
-  slack: { width: 512, height: 512, label: 'Slack icon' },
-  snipe: { width: 256, height: 256, label: 'Snipe-IT icon' },
-  okta: { width: 400, height: 400, label: 'Okta icon' }
+  size512: { width: 512, height: 512, label: '512 x 512 (Large)' },
+  size256: { width: 256, height: 256, label: '256 x 256 (Small)' },
+  size400: { width: 400, height: 400, label: '400 x 400 (Medium)' }
 };
 
 let currentImage = null;
@@ -42,7 +42,7 @@ function getElements() {
  * @param {Object} elements DOM参照
  */
 function setupInitialState(elements) {
-  elements.presetSelect.value = 'slack';
+  elements.presetSelect.value = 'size512';
   elements.fitSelect.value = 'cover';
   toggleCustomFields(elements);
   toggleBackgroundPicker(elements);
