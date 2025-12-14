@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Icon Prep Tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Icon Prep Tool</h1>
+    <p class="subtitle">Slack / Snipe-IT / Okta向けのシンプルなアイコン作成ツール</p>
+  </header>
+
+  <main class="layout">
+    <section class="controls" aria-label="操作パネル">
+      <div class="control-group">
+        <label for="fileInput">画像をアップロード</label>
+        <input type="file" id="fileInput" accept="image/png, image/jpeg">
+      </div>
+
+      <div class="control-group">
+        <label for="presetSelect">プリセットサイズ</label>
+        <select id="presetSelect">
+          <option value="slack">Slack icon (512 x 512)</option>
+          <option value="snipe">Snipe-IT icon (256 x 256)</option>
+          <option value="okta">Okta icon (400 x 400)</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="customSizeFields" class="custom-size" aria-live="polite">
+          <label class="inline" for="customWidth">幅</label>
+          <input type="number" id="customWidth" min="1" value="512">
+          <label class="inline" for="customHeight">高さ</label>
+          <input type="number" id="customHeight" min="1" value="512">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label for="fitSelect">フィットモード</label>
+        <select id="fitSelect">
+          <option value="cover">Cover (fill)</option>
+          <option value="contain">Fit (contain)</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label class="inline" for="transparentToggle">
+          <input type="checkbox" id="transparentToggle" checked>
+          透過背景 (PNG)
+        </label>
+        <div id="bgColorWrapper" class="color-picker">
+          <label for="bgColor">背景色</label>
+          <input type="color" id="bgColor" value="#ffffff">
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button id="centerButton" type="button">中央に配置</button>
+        <button id="downloadButton" type="button">PNGとしてダウンロード</button>
+      </div>
+    </section>
+
+    <section class="preview" aria-label="プレビュー">
+      <canvas id="previewCanvas" width="512" height="512"></canvas>
+      <p id="sizeLabel" class="size-label" aria-live="polite">Size: 512 x 512</p>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
