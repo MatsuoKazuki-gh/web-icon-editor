@@ -4,11 +4,17 @@ const PRESETS = {
   size400: { width: 400, height: 400, label: '400 x 400 (Medium)' }
 };
 
+const HANDLE_SIZE = 12;
+const MIN_CROP_SIZE = 16;
+
 let currentImage = null;
 let cropRect = null;
 let previewCropRect = null;
 let isDraggingCrop = false;
 let dragStart = null;
+let dragMode = null;
+let activeHandle = null;
+let baseCropRect = null;
 
 /**
  * DOM構築後に初期化処理をセットアップする。
@@ -303,6 +309,7 @@ function drawCropOverlay(ctx, drawInfo, sourceRect) {
   ctx.lineWidth = 2;
   ctx.fillRect(projected.x, projected.y, projected.width, projected.height);
   ctx.strokeRect(projected.x, projected.y, projected.width, projected.height);
+  drawResizeHandles(ctx, projected);
   ctx.restore();
 }
 
@@ -326,18 +333,80 @@ function projectRectToCanvas(rect, sourceRect, drawInfo) {
 }
 
 /**
+ * リサイズ用のハンドルを描画する。
+ * @param {CanvasRenderingContext2D} ctx 描画コンテキスト
+ * @param {{x:number, y:number, width:number, height:number}} projectedRect キャンバス上の矩形
+ */
+function drawResizeHandles(ctx, projectedRect) {
+  const handles = getHandlePositions(projectedRect);
+  ctx.fillStyle = 'white';
+  ctx.strokeStyle = 'rgba(37, 99, 235, 0.9)';
+  ctx.lineWidth = 2;
+
+  handles.forEach((handle) => {
+    ctx.beginPath();
+    ctx.rect(handle.x - HANDLE_SIZE / 2, handle.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+/**
+ * ハンドルの座標セットを生成する。
+ * @param {{x:number, y:number, width:number, height:number}} rect 基準矩形（キャンバス座標）
+ * @returns {{name:string, x:number, y:number}[]} ハンドル情報の配列
+ */
+function getHandlePositions(rect) {
+  const midX = rect.x + rect.width / 2;
+  const midY = rect.y + rect.height / 2;
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+
+  return [
+    { name: 'nw', x: rect.x, y: rect.y },
+    { name: 'n', x: midX, y: rect.y },
+    { name: 'ne', x: right, y: rect.y },
+    { name: 'e', x: right, y: midY },
+    { name: 'se', x: right, y: bottom },
+    { name: 's', x: midX, y: bottom },
+    { name: 'sw', x: rect.x, y: bottom },
+    { name: 'w', x: rect.x, y: midY }
+  ];
+}
+
+/**
  * キャンバス上でのドラッグ開始を処理する。
  * @param {MouseEvent} event mousedownイベント
  * @param {Object} elements DOM参照
  */
 function handleCropStart(event, elements) {
   if (!currentImage) return;
-  const point = getImagePointFromEvent(event, elements);
-  if (!point) return;
+  const canvasPoint = getCanvasPointFromEvent(event, elements);
+  if (!canvasPoint) return;
+
+  const imagePoint = getImagePointFromCanvasPoint(canvasPoint, elements);
+  if (!imagePoint) return;
+
+  const sourceRect = getActiveCropRect();
+  const drawInfo = calculateDrawBox(elements, sourceRect);
+  const hasExistingSelection = Boolean(cropRect);
+  const handle = hasExistingSelection
+    ? detectHandleHit(canvasPoint, cropRect, sourceRect, drawInfo)
+    : null;
 
   isDraggingCrop = true;
-  dragStart = point;
-  previewCropRect = { x: point.x, y: point.y, width: 0, height: 0 };
+  dragStart = imagePoint;
+  baseCropRect = cropRect ? { ...cropRect } : null;
+
+  if (handle) {
+    dragMode = 'resize';
+    activeHandle = handle;
+  } else if (hasExistingSelection && isPointInsideSelection(canvasPoint, cropRect, sourceRect, drawInfo)) {
+    dragMode = 'move';
+  } else {
+    dragMode = 'create';
+    previewCropRect = { x: imagePoint.x, y: imagePoint.y, width: 0, height: 0 };
+  }
 }
 
 /**
@@ -348,12 +417,34 @@ function handleCropStart(event, elements) {
 function handleCropMove(event, elements) {
   if (!isDraggingCrop || !currentImage) return;
 
-  const point = getImagePointFromEvent(event, elements);
-  if (!point) return;
+  const imagePoint = getImagePointFromEvent(event, elements);
+  if (!imagePoint) return;
 
-  const baseRect = getActiveCropRect();
-  const constrained = constrainPointToRect(point, baseRect);
-  previewCropRect = createRectFromPoints(dragStart, constrained);
+  if (dragMode === 'create') {
+    const baseRect = getFullImageRect();
+    const constrained = constrainPointToRect(imagePoint, baseRect);
+    previewCropRect = createRectFromPoints(dragStart, constrained);
+  }
+
+  if (dragMode === 'move' && baseCropRect) {
+    const deltaX = imagePoint.x - dragStart.x;
+    const deltaY = imagePoint.y - dragStart.y;
+    const moved = {
+      x: baseCropRect.x + deltaX,
+      y: baseCropRect.y + deltaY,
+      width: baseCropRect.width,
+      height: baseCropRect.height
+    };
+    cropRect = clampRectToImage(moved);
+    previewCropRect = { ...cropRect };
+  }
+
+  if (dragMode === 'resize' && baseCropRect && activeHandle) {
+    const resized = resizeRectWithHandle(baseCropRect, activeHandle, imagePoint);
+    cropRect = clampRectToImage(resized);
+    previewCropRect = { ...cropRect };
+  }
+
   redrawCanvas(elements);
 }
 
@@ -366,8 +457,11 @@ function handleCropEnd(elements) {
 
   isDraggingCrop = false;
   dragStart = null;
+  dragMode = null;
+  activeHandle = null;
+  baseCropRect = null;
 
-  if (previewCropRect && previewCropRect.width > 0 && previewCropRect.height > 0) {
+  if (previewCropRect && previewCropRect.width >= MIN_CROP_SIZE && previewCropRect.height >= MIN_CROP_SIZE) {
     cropRect = previewCropRect;
   }
 
@@ -382,27 +476,159 @@ function handleCropEnd(elements) {
  * @returns {{x:number, y:number} | null}
  */
 function getImagePointFromEvent(event, elements) {
+  const canvasPoint = getCanvasPointFromEvent(event, elements);
+  if (!canvasPoint) return null;
+  return getImagePointFromCanvasPoint(canvasPoint, elements);
+}
+
+/**
+ * イベントからキャンバス座標系の点を取得する。
+ * @param {MouseEvent} event マウスイベント
+ * @param {Object} elements DOM参照
+ * @returns {{x:number, y:number} | null}
+ */
+function getCanvasPointFromEvent(event, elements) {
   const rect = elements.canvas.getBoundingClientRect();
   const scaleX = elements.canvas.width / rect.width;
   const scaleY = elements.canvas.height / rect.height;
-  const canvasX = (event.clientX - rect.left) * scaleX;
-  const canvasY = (event.clientY - rect.top) * scaleY;
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY
+  };
+}
 
+/**
+ * キャンバス座標の点を画像座標に変換する。
+ * @param {{x:number, y:number}} canvasPoint キャンバス座標の点
+ * @param {Object} elements DOM参照
+ * @returns {{x:number, y:number} | null}
+ */
+function getImagePointFromCanvasPoint(canvasPoint, elements) {
   const sourceRect = getActiveCropRect();
   if (!sourceRect) return null;
   const drawInfo = calculateDrawBox(elements, sourceRect);
 
-  const insideX = canvasX >= drawInfo.offsetX && canvasX <= drawInfo.offsetX + drawInfo.drawWidth;
-  const insideY = canvasY >= drawInfo.offsetY && canvasY <= drawInfo.offsetY + drawInfo.drawHeight;
+  const insideX = canvasPoint.x >= drawInfo.offsetX && canvasPoint.x <= drawInfo.offsetX + drawInfo.drawWidth;
+  const insideY = canvasPoint.y >= drawInfo.offsetY && canvasPoint.y <= drawInfo.offsetY + drawInfo.drawHeight;
   if (!insideX || !insideY) return null;
 
-  const normalizedX = (canvasX - drawInfo.offsetX) / drawInfo.drawWidth;
-  const normalizedY = (canvasY - drawInfo.offsetY) / drawInfo.drawHeight;
+  const normalizedX = (canvasPoint.x - drawInfo.offsetX) / drawInfo.drawWidth;
+  const normalizedY = (canvasPoint.y - drawInfo.offsetY) / drawInfo.drawHeight;
 
   return {
     x: sourceRect.x + normalizedX * sourceRect.width,
     y: sourceRect.y + normalizedY * sourceRect.height
   };
+}
+
+/**
+ * 選択領域上に存在するかを判定する。
+ * @param {{x:number, y:number}} canvasPoint キャンバス座標の点
+ * @param {{x:number, y:number, width:number, height:number}} rect 対象矩形（画像座標）
+ * @param {{x:number, y:number, width:number, height:number}} sourceRect 描画元矩形
+ * @param {{drawWidth:number, drawHeight:number, offsetX:number, offsetY:number}} drawInfo 描画情報
+ * @returns {boolean}
+ */
+function isPointInsideSelection(canvasPoint, rect, sourceRect, drawInfo) {
+  const projected = projectRectToCanvas(rect, sourceRect, drawInfo);
+  return (
+    canvasPoint.x >= projected.x &&
+    canvasPoint.x <= projected.x + projected.width &&
+    canvasPoint.y >= projected.y &&
+    canvasPoint.y <= projected.y + projected.height
+  );
+}
+
+/**
+ * ハンドル上をクリックしたかどうかを判定する。
+ * @param {{x:number, y:number}} canvasPoint キャンバス座標の点
+ * @param {{x:number, y:number, width:number, height:number}} rect 対象矩形（画像座標）
+ * @param {{x:number, y:number, width:number, height:number}} sourceRect 描画元矩形
+ * @param {{drawWidth:number, drawHeight:number, offsetX:number, offsetY:number}} drawInfo 描画情報
+ * @returns {string|null} ヒットしたハンドル名
+ */
+function detectHandleHit(canvasPoint, rect, sourceRect, drawInfo) {
+  const projected = projectRectToCanvas(rect, sourceRect, drawInfo);
+  const handles = getHandlePositions(projected);
+
+  for (const handle of handles) {
+    const dx = canvasPoint.x - handle.x;
+    const dy = canvasPoint.y - handle.y;
+    const half = HANDLE_SIZE / 2;
+    if (Math.abs(dx) <= half && Math.abs(dy) <= half) {
+      return handle.name;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * ハンドル操作に応じて矩形をリサイズする。
+ * @param {{x:number, y:number, width:number, height:number}} startRect 操作開始時の矩形
+ * @param {string} handleName ハンドル名
+ * @param {{x:number, y:number}} currentPoint 現在の画像座標点
+ * @returns {{x:number, y:number, width:number, height:number}}
+ */
+function resizeRectWithHandle(startRect, handleName, currentPoint) {
+  const rect = { ...startRect };
+  const maxRight = rect.x + rect.width;
+  const maxBottom = rect.y + rect.height;
+
+  if (handleName.includes('w')) {
+    const newLeft = Math.min(currentPoint.x, maxRight - MIN_CROP_SIZE);
+    rect.width = maxRight - newLeft;
+    rect.x = newLeft;
+  }
+
+  if (handleName.includes('e')) {
+    const newRight = Math.max(currentPoint.x, rect.x + MIN_CROP_SIZE);
+    rect.width = newRight - rect.x;
+  }
+
+  if (handleName.includes('n')) {
+    const newTop = Math.min(currentPoint.y, maxBottom - MIN_CROP_SIZE);
+    rect.height = maxBottom - newTop;
+    rect.y = newTop;
+  }
+
+  if (handleName.includes('s')) {
+    const newBottom = Math.max(currentPoint.y, rect.y + MIN_CROP_SIZE);
+    rect.height = newBottom - rect.y;
+  }
+
+  return rect;
+}
+
+/**
+ * 矩形を画像内に収め、最小サイズを維持する。
+ * @param {{x:number, y:number, width:number, height:number}} rect 対象矩形
+ * @returns {{x:number, y:number, width:number, height:number}}
+ */
+function clampRectToImage(rect) {
+  const maxX = currentImage.width;
+  const maxY = currentImage.height;
+
+  const width = Math.max(rect.width, MIN_CROP_SIZE);
+  const height = Math.max(rect.height, MIN_CROP_SIZE);
+
+  const clampedX = Math.min(Math.max(rect.x, 0), maxX - width);
+  const clampedY = Math.min(Math.max(rect.y, 0), maxY - height);
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    width,
+    height
+  };
+}
+
+/**
+ * 画像全体を表す矩形を返す。
+ * @returns {{x:number, y:number, width:number, height:number}}
+ */
+function getFullImageRect() {
+  return { x: 0, y: 0, width: currentImage?.width || 0, height: currentImage?.height || 0 };
 }
 
 /**
