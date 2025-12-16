@@ -196,14 +196,14 @@ function redrawCanvas(elements) {
 
   if (!currentImage) return;
 
-  const sourceRect = getActiveCropRect();
-  const drawInfo = calculateDrawBox(elements, sourceRect);
+  const fullImageRect = getFullImageRect();
+  const drawInfo = calculateDrawBox(elements, fullImageRect);
   ctx.drawImage(
     currentImage,
-    sourceRect.x,
-    sourceRect.y,
-    sourceRect.width,
-    sourceRect.height,
+    fullImageRect.x,
+    fullImageRect.y,
+    fullImageRect.width,
+    fullImageRect.height,
     drawInfo.offsetX,
     drawInfo.offsetY,
     drawInfo.drawWidth,
@@ -214,7 +214,7 @@ function redrawCanvas(elements) {
     drawGridLines(ctx, elements.canvas);
   }
 
-  drawCropOverlay(ctx, drawInfo, sourceRect);
+  drawCropOverlay(ctx, drawInfo, fullImageRect);
 }
 
 /**
@@ -242,15 +242,42 @@ function calculateDrawBox(elements, sourceRect) {
 }
 
 /**
- * キャンバスをPNGとしてダウンロードする。
+ * 選択領域をPNGとしてダウンロードする（選択がなければ全体）。
  * @param {Object} elements DOM参照
  */
 function downloadImage(elements) {
+  if (!currentImage) return;
+
+  const exportSourceRect = cropRect || getFullImageRect();
+  const { width, height } = getTargetSize(elements);
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = width;
+  exportCanvas.height = height;
+  const ctx = exportCanvas.getContext('2d');
+
+  if (!elements.transparentToggle.checked) {
+    ctx.fillStyle = elements.bgColor.value;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  const drawInfo = calculateDrawBox({ canvas: exportCanvas, fitSelect: elements.fitSelect }, exportSourceRect);
+  ctx.drawImage(
+    currentImage,
+    exportSourceRect.x,
+    exportSourceRect.y,
+    exportSourceRect.width,
+    exportSourceRect.height,
+    drawInfo.offsetX,
+    drawInfo.offsetY,
+    drawInfo.drawWidth,
+    drawInfo.drawHeight
+  );
+
   const link = document.createElement('a');
   const presetKey = elements.presetSelect.value;
   const presetName = presetKey === 'custom' ? 'custom' : `${presetKey}-icon`;
   link.download = `${presetName}.png`;
-  link.href = elements.canvas.toDataURL('image/png');
+  link.href = exportCanvas.toDataURL('image/png');
   link.click();
 }
 
@@ -261,7 +288,7 @@ function downloadImage(elements) {
 function getActiveCropRect() {
   if (!currentImage) return null;
   if (cropRect) return cropRect;
-  return { x: 0, y: 0, width: currentImage.width, height: currentImage.height };
+  return getFullImageRect();
 }
 
 /**
@@ -304,10 +331,19 @@ function drawCropOverlay(ctx, drawInfo, sourceRect) {
 
   const projected = projectRectToCanvas(activeRect, sourceRect, drawInfo);
   ctx.save();
-  ctx.strokeStyle = 'rgba(37, 99, 235, 0.9)';
-  ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
-  ctx.lineWidth = 2;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  ctx.globalCompositeOperation = 'destination-out';
   ctx.fillRect(projected.x, projected.y, projected.width, projected.height);
+
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.fillRect(projected.x, projected.y, projected.width, projected.height);
+
+  ctx.strokeStyle = 'rgba(37, 99, 235, 0.9)';
+  ctx.lineWidth = 2;
   ctx.strokeRect(projected.x, projected.y, projected.width, projected.height);
   drawResizeHandles(ctx, projected);
   ctx.restore();
@@ -387,7 +423,7 @@ function handleCropStart(event, elements) {
   const imagePoint = getImagePointFromCanvasPoint(canvasPoint, elements);
   if (!imagePoint) return;
 
-  const sourceRect = getActiveCropRect();
+  const sourceRect = getFullImageRect();
   const drawInfo = calculateDrawBox(elements, sourceRect);
   const hasExistingSelection = Boolean(cropRect);
   const handle = hasExistingSelection
@@ -504,7 +540,7 @@ function getCanvasPointFromEvent(event, elements) {
  * @returns {{x:number, y:number} | null}
  */
 function getImagePointFromCanvasPoint(canvasPoint, elements) {
-  const sourceRect = getActiveCropRect();
+  const sourceRect = getFullImageRect();
   if (!sourceRect) return null;
   const drawInfo = calculateDrawBox(elements, sourceRect);
 
