@@ -17,6 +17,16 @@ let activeHandle = null;
 let baseCropRect = null;
 
 /**
+ * 現在のプリセットに基づいて高さ:横幅のアスペクト比を返す。
+ * @param {Object} elements DOM参照
+ * @returns {number} 高さ/横幅の比率
+ */
+function getTargetAspect(elements) {
+  const { width, height } = getTargetSize(elements);
+  return height / width;
+}
+
+/**
  * DOM構築後に初期化処理をセットアップする。
  */
 document.addEventListener('DOMContentLoaded', () => {
@@ -455,7 +465,8 @@ function handleCropMove(event, elements) {
   if (dragMode === 'create') {
     const baseRect = getFullImageRect();
     const constrained = constrainPointToRect(imagePoint, baseRect);
-    previewCropRect = createRectFromPoints(dragStart, constrained);
+    const aspect = getTargetAspect(elements);
+    previewCropRect = createAspectRect(dragStart, constrained, aspect, baseRect);
   }
 
   if (dragMode === 'move' && baseCropRect) {
@@ -472,7 +483,8 @@ function handleCropMove(event, elements) {
   }
 
   if (dragMode === 'resize' && baseCropRect && activeHandle) {
-    const resized = resizeRectWithHandle(baseCropRect, activeHandle, imagePoint);
+    const aspect = getTargetAspect(elements);
+    const resized = resizeRectWithHandle(baseCropRect, activeHandle, imagePoint, aspect);
     cropRect = clampRectToImage(resized);
     previewCropRect = { ...cropRect };
   }
@@ -602,34 +614,10 @@ function detectHandleHit(canvasPoint, rect, sourceRect, drawInfo) {
  * @param {{x:number, y:number}} currentPoint 現在の画像座標点
  * @returns {{x:number, y:number, width:number, height:number}}
  */
-function resizeRectWithHandle(startRect, handleName, currentPoint) {
-  const rect = { ...startRect };
-  const maxRight = rect.x + rect.width;
-  const maxBottom = rect.y + rect.height;
-
-  if (handleName.includes('w')) {
-    const newLeft = Math.min(currentPoint.x, maxRight - MIN_CROP_SIZE);
-    rect.width = maxRight - newLeft;
-    rect.x = newLeft;
-  }
-
-  if (handleName.includes('e')) {
-    const newRight = Math.max(currentPoint.x, rect.x + MIN_CROP_SIZE);
-    rect.width = newRight - rect.x;
-  }
-
-  if (handleName.includes('n')) {
-    const newTop = Math.min(currentPoint.y, maxBottom - MIN_CROP_SIZE);
-    rect.height = maxBottom - newTop;
-    rect.y = newTop;
-  }
-
-  if (handleName.includes('s')) {
-    const newBottom = Math.max(currentPoint.y, rect.y + MIN_CROP_SIZE);
-    rect.height = newBottom - rect.y;
-  }
-
-  return rect;
+function resizeRectWithHandle(startRect, handleName, currentPoint, aspect) {
+  const anchor = getHandleAnchorPoint(startRect, handleName);
+  const bounds = getFullImageRect();
+  return createAspectRect(anchor, currentPoint, aspect, bounds);
 }
 
 /**
@@ -675,6 +663,97 @@ function createRectFromPoints(start, end) {
   const width = Math.abs(end.x - start.x);
   const height = Math.abs(end.y - start.y);
   return { x, y, width, height };
+}
+
+/**
+ * 2点とアスペクト比から矩形を生成する。開始点側を基準にしつつ、矩形が画像の範囲からはみ出さないよう制限する。
+ * @param {{x:number, y:number}} start 基準点
+ * @param {{x:number, y:number}} end 現在位置
+ * @param {number} aspect 高さ/横幅の比率
+ * @param {{x:number, y:number, width:number, height:number}} bounds 制限範囲
+ * @returns {{x:number, y:number, width:number, height:number}}
+ */
+function createAspectRect(start, end, aspect, bounds) {
+  const directionX = end.x >= start.x ? 1 : -1;
+  const directionY = end.y >= start.y ? 1 : -1;
+
+  const maxWidth = directionX === 1
+    ? bounds.x + bounds.width - start.x
+    : start.x - bounds.x;
+  const maxHeight = directionY === 1
+    ? bounds.y + bounds.height - start.y
+    : start.y - bounds.y;
+
+  const suggestedWidth = Math.abs(end.x - start.x);
+  const suggestedHeight = Math.abs(end.y - start.y);
+
+  let targetWidth = suggestedWidth;
+  let targetHeight = targetWidth * aspect;
+
+  if (targetHeight > suggestedHeight) {
+    targetHeight = suggestedHeight;
+    targetWidth = targetHeight / aspect;
+  }
+
+  targetWidth = Math.min(Math.max(targetWidth, MIN_CROP_SIZE), maxWidth);
+  targetHeight = targetWidth * aspect;
+
+  if (targetHeight > maxHeight) {
+    targetHeight = maxHeight;
+    targetWidth = targetHeight / aspect;
+  }
+
+  targetHeight = Math.max(targetHeight, MIN_CROP_SIZE);
+  targetWidth = targetHeight / aspect;
+
+  if (targetWidth > maxWidth) {
+    targetWidth = maxWidth;
+    targetHeight = targetWidth * aspect;
+  }
+
+  if (targetHeight > maxHeight) {
+    targetHeight = maxHeight;
+    targetWidth = targetHeight / aspect;
+  }
+
+  const x = start.x + (directionX === 1 ? 0 : -targetWidth);
+  const y = start.y + (directionY === 1 ? 0 : -targetHeight);
+
+  return {
+    x: Math.min(Math.max(x, bounds.x), bounds.x + bounds.width - targetWidth),
+    y: Math.min(Math.max(y, bounds.y), bounds.y + bounds.height - targetHeight),
+    width: targetWidth,
+    height: targetHeight
+  };
+}
+
+/**
+ * ハンドル位置に応じて固定する基準点を返す。
+ * @param {{x:number, y:number, width:number, height:number}} rect 基準矩形
+ * @param {string} handleName ハンドル名
+ * @returns {{x:number, y:number}}
+ */
+function getHandleAnchorPoint(rect, handleName) {
+  switch (handleName) {
+    case 'nw':
+      return { x: rect.x + rect.width, y: rect.y + rect.height };
+    case 'ne':
+      return { x: rect.x, y: rect.y + rect.height };
+    case 'sw':
+      return { x: rect.x + rect.width, y: rect.y };
+    case 'se':
+      return { x: rect.x, y: rect.y };
+    case 'n':
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+    case 's':
+      return { x: rect.x + rect.width / 2, y: rect.y };
+    case 'w':
+      return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+    case 'e':
+      return { x: rect.x, y: rect.y + rect.height / 2 };
+    default:
+      return { x: rect.x, y: rect.y };
+  }
 }
 
 /**
