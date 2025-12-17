@@ -333,12 +333,11 @@ function drawCropOverlay(ctx, drawInfo, sourceRect) {
   ctx.save();
 
   ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.beginPath();
+  ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.rect(projected.x, projected.y, projected.width, projected.height);
+  ctx.fill('evenodd');
 
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.fillRect(projected.x, projected.y, projected.width, projected.height);
-
-  ctx.globalCompositeOperation = 'source-over';
   ctx.strokeStyle = 'rgba(37, 99, 235, 0.9)';
   ctx.lineWidth = 2;
   ctx.strokeRect(projected.x, projected.y, projected.width, projected.height);
