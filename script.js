@@ -15,6 +15,9 @@ let dragStart = null;
 let dragMode = null;
 let activeHandle = null;
 let baseCropRect = null;
+let zoomLevel = 1;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 5;
 
 /**
  * 現在のプリセットに基づいて高さ:横幅のアスペクト比を返す。
@@ -46,11 +49,9 @@ function getElements() {
     customFields: document.getElementById('customSizeFields'),
     customWidth: document.getElementById('customWidth'),
     customHeight: document.getElementById('customHeight'),
-    fitSelect: document.getElementById('fitSelect'),
     transparentToggle: document.getElementById('transparentToggle'),
     bgColorWrapper: document.getElementById('bgColorWrapper'),
     bgColor: document.getElementById('bgColor'),
-    centerButton: document.getElementById('centerButton'),
     downloadButton: document.getElementById('downloadButton'),
     resetCropButton: document.getElementById('resetCropButton'),
     gridToggle: document.getElementById('gridToggle'),
@@ -65,9 +66,9 @@ function getElements() {
  */
 function setupInitialState(elements) {
   elements.presetSelect.value = 'size512';
-  elements.fitSelect.value = 'cover';
   toggleCustomFields(elements);
   toggleBackgroundPicker(elements);
+  resetZoom();
   updateCanvasSize(elements);
 }
 
@@ -80,10 +81,8 @@ function bindEvents(elements) {
   elements.presetSelect.addEventListener('change', () => handlePresetChange(elements));
   elements.customWidth.addEventListener('input', () => handleCustomSizeChange(elements));
   elements.customHeight.addEventListener('input', () => handleCustomSizeChange(elements));
-  elements.fitSelect.addEventListener('change', () => redrawCanvas(elements));
   elements.transparentToggle.addEventListener('change', () => handleBackgroundToggle(elements));
   elements.bgColor.addEventListener('input', () => redrawCanvas(elements));
-  elements.centerButton.addEventListener('click', () => redrawCanvas(elements));
   elements.downloadButton.addEventListener('click', () => downloadImage(elements));
   elements.gridToggle.addEventListener('change', () => redrawCanvas(elements));
   elements.resetCropButton.addEventListener('click', () => resetCrop(elements));
@@ -91,6 +90,7 @@ function bindEvents(elements) {
   elements.canvas.addEventListener('mousemove', (event) => handleCropMove(event, elements));
   elements.canvas.addEventListener('mouseup', () => handleCropEnd(elements));
   elements.canvas.addEventListener('mouseleave', () => handleCropEnd(elements));
+  elements.canvas.addEventListener('wheel', (event) => handleWheelZoom(event, elements), { passive: false });
 }
 
 /**
@@ -99,6 +99,7 @@ function bindEvents(elements) {
  */
 function handlePresetChange(elements) {
   toggleCustomFields(elements);
+  resetZoom();
   updateCanvasSize(elements);
   redrawCanvas(elements);
 }
@@ -109,6 +110,7 @@ function handlePresetChange(elements) {
  */
 function handleCustomSizeChange(elements) {
   if (elements.presetSelect.value === 'custom') {
+    resetZoom();
     updateCanvasSize(elements);
     redrawCanvas(elements);
   }
@@ -121,6 +123,25 @@ function handleCustomSizeChange(elements) {
 function handleBackgroundToggle(elements) {
   toggleBackgroundPicker(elements);
   redrawCanvas(elements);
+}
+
+/**
+ * マウスホイールによるズーム操作を処理する。
+ * @param {WheelEvent} event ホイールイベント
+ * @param {Object} elements DOM参照
+ */
+function handleWheelZoom(event, elements) {
+  if (!currentImage) return;
+  event.preventDefault();
+
+  const delta = event.deltaY;
+  const factor = delta < 0 ? 1.1 : 0.9;
+  const nextZoom = Math.min(Math.max(zoomLevel * factor, MIN_ZOOM), MAX_ZOOM);
+
+  if (nextZoom !== zoomLevel) {
+    zoomLevel = nextZoom;
+    redrawCanvas(elements);
+  }
 }
 
 /**
@@ -139,6 +160,7 @@ function handleFileChange(event, elements) {
       currentImage = img;
       cropRect = null;
       previewCropRect = null;
+      resetZoom();
       redrawCanvas(elements);
     };
     img.src = reader.result;
@@ -207,7 +229,7 @@ function redrawCanvas(elements) {
   if (!currentImage) return;
 
   const fullImageRect = getFullImageRect();
-  const drawInfo = calculateDrawBox(elements, fullImageRect);
+  const drawInfo = calculateDrawBox(elements.canvas, fullImageRect);
   ctx.drawImage(
     currentImage,
     fullImageRect.x,
@@ -229,13 +251,15 @@ function redrawCanvas(elements) {
 
 /**
  * 画像の描画サイズとオフセットを計算する。
- * @param {Object} elements DOM参照
+ * @param {HTMLCanvasElement} canvas 対象キャンバス
+ * @param {{x:number, y:number, width:number, height:number}} sourceRect 描画する元矩形
+ * @param {number} [zoom=zoomLevel] 適用するズーム倍率
  * @returns {{drawWidth: number, drawHeight: number, offsetX: number, offsetY: number}}
  */
-function calculateDrawBox(elements, sourceRect) {
-  const fitMode = elements.fitSelect.value;
-  const canvasWidth = elements.canvas.width;
-  const canvasHeight = elements.canvas.height;
+function calculateDrawBox(canvas, sourceRect, zoom = zoomLevel) {
+  const fitMode = 'contain';
+  const canvasWidth = canvas.width;
+  const canvasHeight = canvas.height;
   const imgW = sourceRect.width;
   const imgH = sourceRect.height;
 
@@ -243,8 +267,8 @@ function calculateDrawBox(elements, sourceRect) {
     ? Math.min(canvasWidth / imgW, canvasHeight / imgH)
     : Math.max(canvasWidth / imgW, canvasHeight / imgH);
 
-  const drawWidth = imgW * scale;
-  const drawHeight = imgH * scale;
+  const drawWidth = imgW * scale * zoom;
+  const drawHeight = imgH * scale * zoom;
   const offsetX = (canvasWidth - drawWidth) / 2;
   const offsetY = (canvasHeight - drawHeight) / 2;
 
@@ -270,7 +294,7 @@ function downloadImage(elements) {
     ctx.fillRect(0, 0, width, height);
   }
 
-  const drawInfo = calculateDrawBox({ canvas: exportCanvas, fitSelect: elements.fitSelect }, exportSourceRect);
+  const drawInfo = calculateDrawBox(exportCanvas, exportSourceRect, 1);
   ctx.drawImage(
     currentImage,
     exportSourceRect.x,
@@ -309,7 +333,7 @@ function getActiveCropRect() {
 function drawGridLines(ctx, canvas) {
   const spacing = 32;
   ctx.save();
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
   ctx.lineWidth = 1;
 
   for (let x = spacing; x < canvas.width; x += spacing) {
@@ -430,7 +454,7 @@ function handleCropStart(event, elements) {
   if (!imagePoint) return;
 
   const sourceRect = getFullImageRect();
-  const drawInfo = calculateDrawBox(elements, sourceRect);
+  const drawInfo = calculateDrawBox(elements.canvas, sourceRect);
   const hasExistingSelection = Boolean(cropRect);
   const handle = hasExistingSelection
     ? detectHandleHit(canvasPoint, cropRect, sourceRect, drawInfo)
@@ -550,7 +574,7 @@ function getCanvasPointFromEvent(event, elements) {
 function getImagePointFromCanvasPoint(canvasPoint, elements) {
   const sourceRect = getFullImageRect();
   if (!sourceRect) return null;
-  const drawInfo = calculateDrawBox(elements, sourceRect);
+  const drawInfo = calculateDrawBox(elements.canvas, sourceRect);
 
   const insideX = canvasPoint.x >= drawInfo.offsetX && canvasPoint.x <= drawInfo.offsetX + drawInfo.drawWidth;
   const insideY = canvasPoint.y >= drawInfo.offsetY && canvasPoint.y <= drawInfo.offsetY + drawInfo.drawHeight;
@@ -777,4 +801,11 @@ function resetCrop(elements) {
   cropRect = null;
   previewCropRect = null;
   redrawCanvas(elements);
+}
+
+/**
+ * ズーム倍率を初期状態に戻す。
+ */
+function resetZoom() {
+  zoomLevel = 1;
 }
