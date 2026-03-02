@@ -55,6 +55,8 @@ function getElements() {
     downloadButton: document.getElementById('downloadButton'),
     resetCropButton: document.getElementById('resetCropButton'),
     gridToggle: document.getElementById('gridToggle'),
+    fitToggle: document.getElementById('fitToggle'),
+    centerToggle: document.getElementById('centerToggle'),
     canvas: document.getElementById('previewCanvas'),
     sizeLabel: document.getElementById('sizeLabel')
   };
@@ -85,6 +87,8 @@ function bindEvents(elements) {
   elements.bgColor.addEventListener('input', () => redrawCanvas(elements));
   elements.downloadButton.addEventListener('click', () => downloadImage(elements));
   elements.gridToggle.addEventListener('change', () => redrawCanvas(elements));
+  elements.fitToggle.addEventListener('change', () => redrawCanvas(elements));
+  elements.centerToggle.addEventListener('change', () => redrawCanvas(elements));
   elements.resetCropButton.addEventListener('click', () => resetCrop(elements));
   elements.canvas.addEventListener('mousedown', (event) => handleCropStart(event, elements));
   elements.canvas.addEventListener('mousemove', (event) => handleCropMove(event, elements));
@@ -153,19 +157,71 @@ function handleFileChange(event, elements) {
   const file = event.target.files?.[0];
   if (!file) return;
 
+  const isSvg = file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
   const reader = new FileReader();
+
   reader.onload = () => {
-    const img = new Image();
-    img.onload = () => {
-      currentImage = img;
-      cropRect = null;
-      previewCropRect = null;
-      resetZoom();
-      redrawCanvas(elements);
-    };
-    img.src = reader.result;
+    if (isSvg) {
+      const svgText = String(reader.result || '');
+      const normalizedSvg = normalizeSvgText(svgText);
+      const svgBlob = new Blob([normalizedSvg], { type: 'image/svg+xml' });
+      const svgUrl = URL.createObjectURL(svgBlob);
+      loadImageFromUrl(svgUrl, elements, () => URL.revokeObjectURL(svgUrl));
+    } else {
+      loadImageFromUrl(reader.result, elements);
+    }
   };
-  reader.readAsDataURL(file);
+
+  if (isSvg) {
+    reader.readAsText(file);
+  } else {
+    reader.readAsDataURL(file);
+  }
+}
+
+/**
+ * SVGをパースして必要ならサイズ情報を補完する。
+ * @param {string} svgText SVGテキスト
+ * @returns {string} サイズを補正したSVGテキスト
+ */
+function normalizeSvgText(svgText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, 'image/svg+xml');
+  const svg = doc.querySelector('svg');
+  if (!svg) return svgText;
+
+  const widthAttr = svg.getAttribute('width');
+  const heightAttr = svg.getAttribute('height');
+  const viewBox = svg.getAttribute('viewBox');
+
+  if ((!widthAttr || !heightAttr) && viewBox) {
+    const parts = viewBox.split(/[\s,]+/).map((value) => Number.parseFloat(value));
+    if (parts.length === 4) {
+      if (!widthAttr) svg.setAttribute('width', String(parts[2]));
+      if (!heightAttr) svg.setAttribute('height', String(parts[3]));
+    }
+  }
+
+  return new XMLSerializer().serializeToString(svg);
+}
+
+/**
+ * 画像URLから読み込んでキャンバスを更新する。
+ * @param {string} url 画像URL
+ * @param {Object} elements DOM参照
+ * @param {Function} [onLoadComplete] 読み込み完了後の後処理
+ */
+function loadImageFromUrl(url, elements, onLoadComplete) {
+  const img = new Image();
+  img.onload = () => {
+    currentImage = img;
+    cropRect = null;
+    previewCropRect = null;
+    resetZoom();
+    redrawCanvas(elements);
+    if (onLoadComplete) onLoadComplete();
+  };
+  img.src = url;
 }
 
 /**
@@ -229,7 +285,8 @@ function redrawCanvas(elements) {
   if (!currentImage) return;
 
   const fullImageRect = getFullImageRect();
-  const drawInfo = calculateDrawBox(elements.canvas, fullImageRect);
+  const layoutOptions = getLayoutOptions(elements);
+  const drawInfo = calculateDrawBox(elements.canvas, fullImageRect, layoutOptions);
   ctx.drawImage(
     currentImage,
     fullImageRect.x,
@@ -250,27 +307,40 @@ function redrawCanvas(elements) {
 }
 
 /**
+ * 描画オプションをフォームから取得する。
+ * @param {Object} elements DOM参照
+ * @returns {{fitToCanvas: boolean, centerImage: boolean}}
+ */
+function getLayoutOptions(elements) {
+  return {
+    fitToCanvas: elements.fitToggle.checked,
+    centerImage: elements.centerToggle.checked
+  };
+}
+
+/**
  * 画像の描画サイズとオフセットを計算する。
  * @param {HTMLCanvasElement} canvas 対象キャンバス
  * @param {{x:number, y:number, width:number, height:number}} sourceRect 描画する元矩形
+ * @param {{fitToCanvas: boolean, centerImage: boolean}} layoutOptions 描画オプション
  * @param {number} [zoom=zoomLevel] 適用するズーム倍率
  * @returns {{drawWidth: number, drawHeight: number, offsetX: number, offsetY: number}}
  */
-function calculateDrawBox(canvas, sourceRect, zoom = zoomLevel) {
-  const fitMode = 'contain';
+function calculateDrawBox(canvas, sourceRect, layoutOptions, zoom = zoomLevel) {
+  const { fitToCanvas, centerImage } = layoutOptions;
   const canvasWidth = canvas.width;
   const canvasHeight = canvas.height;
   const imgW = sourceRect.width;
   const imgH = sourceRect.height;
 
-  const scale = fitMode === 'contain'
+  const baseScale = fitToCanvas
     ? Math.min(canvasWidth / imgW, canvasHeight / imgH)
-    : Math.max(canvasWidth / imgW, canvasHeight / imgH);
+    : 1;
 
-  const drawWidth = imgW * scale * zoom;
-  const drawHeight = imgH * scale * zoom;
-  const offsetX = (canvasWidth - drawWidth) / 2;
-  const offsetY = (canvasHeight - drawHeight) / 2;
+  const drawWidth = imgW * baseScale * zoom;
+  const drawHeight = imgH * baseScale * zoom;
+  const offsetX = centerImage ? (canvasWidth - drawWidth) / 2 : 0;
+  const offsetY = centerImage ? (canvasHeight - drawHeight) / 2 : 0;
 
   return { drawWidth, drawHeight, offsetX, offsetY };
 }
@@ -294,7 +364,8 @@ function downloadImage(elements) {
     ctx.fillRect(0, 0, width, height);
   }
 
-  const drawInfo = calculateDrawBox(exportCanvas, exportSourceRect, 1);
+  const layoutOptions = getLayoutOptions(elements);
+  const drawInfo = calculateDrawBox(exportCanvas, exportSourceRect, layoutOptions, 1);
   ctx.drawImage(
     currentImage,
     exportSourceRect.x,
@@ -454,7 +525,8 @@ function handleCropStart(event, elements) {
   if (!imagePoint) return;
 
   const sourceRect = getFullImageRect();
-  const drawInfo = calculateDrawBox(elements.canvas, sourceRect);
+  const layoutOptions = getLayoutOptions(elements);
+  const drawInfo = calculateDrawBox(elements.canvas, sourceRect, layoutOptions);
   const hasExistingSelection = Boolean(cropRect);
   const handle = hasExistingSelection
     ? detectHandleHit(canvasPoint, cropRect, sourceRect, drawInfo)
@@ -574,7 +646,8 @@ function getCanvasPointFromEvent(event, elements) {
 function getImagePointFromCanvasPoint(canvasPoint, elements) {
   const sourceRect = getFullImageRect();
   if (!sourceRect) return null;
-  const drawInfo = calculateDrawBox(elements.canvas, sourceRect);
+  const layoutOptions = getLayoutOptions(elements);
+  const drawInfo = calculateDrawBox(elements.canvas, sourceRect, layoutOptions);
 
   const insideX = canvasPoint.x >= drawInfo.offsetX && canvasPoint.x <= drawInfo.offsetX + drawInfo.drawWidth;
   const insideY = canvasPoint.y >= drawInfo.offsetY && canvasPoint.y <= drawInfo.offsetY + drawInfo.drawHeight;

@@ -16,7 +16,7 @@
     <section class="controls" aria-label="操作パネル">
       <div class="control-group">
         <label for="fileInput">画像をアップロード</label>
-        <input type="file" id="fileInput" accept="image/png, image/jpeg">
+        <input type="file" id="fileInput" accept="image/png, image/jpeg, image/svg+xml">
       </div>
 
       <div class="control-group">
@@ -52,6 +52,17 @@
           グリッド線を表示
         </label>
         <p class="hint">キャンバス上でドラッグすると切り取り範囲を指定でき、選択後は端のマークをドラッグして微調整できます。</p>
+      </div>
+
+      <div class="control-group">
+        <label class="inline" for="fitToggle">
+          <input type="checkbox" id="fitToggle" checked>
+          全体を範囲内に収める
+        </label>
+        <label class="inline" for="centerToggle">
+          <input type="checkbox" id="centerToggle" checked>
+          画像を中央に配置
+        </label>
       </div>
 
       <div class="buttons">
